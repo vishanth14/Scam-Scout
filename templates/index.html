@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scam Scout</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:wght@400;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="bgBlob bgBlobA" aria-hidden="true"></div>
+    <div class="bgBlob bgBlobB" aria-hidden="true"></div>
+    <div class="bgBlob bgBlobC" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">SS</div>
+          <div>
+            <div class="brand-title">Scam Scout</div>
+            <div class="brand-subtitle">AI-powered job scam detection</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <nav class="navTabs" aria-label="Primary navigation">
+            <button id="navAnalyze" class="navTab isActive" type="button">Analyze</button>
+            <button id="navHistory" class="navTab" type="button">History</button>
+            <button id="navSettings" class="navTab" type="button">Settings</button>
+          </nav>
+        </div>
+      </div>
+    </header>
+
+    <main class="container dashboard">
+      <section id="viewAnalyze" class="view isActive" aria-label="Analyze view">
+        <div class="dashboardGrid">
+          <div class="panel">
+            <div class="card">
+              <div class="cardHeader">
+                <div>
+                  <div class="cardTitle">Analyze a job link</div>
+                  <div class="cardSubtitle">Paste a job URL and get a clear SAFE / AT RISK verdict.</div>
+                </div>
+                <div class="headerIllustration" aria-hidden="true">
+                  <svg viewBox="0 0 220 140" xmlns="http://www.w3.org/2000/svg" role="img">
+                    <defs>
+                      <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0" stop-color="#FFD700" stop-opacity="0.95" />
+                        <stop offset="1" stop-color="#FFC300" stop-opacity="0.55" />
+                      </linearGradient>
+                    </defs>
+                    <rect x="10" y="18" width="90" height="90" rx="18" fill="url(#g1)" fill-opacity="0.12" stroke="rgba(255,215,0,0.35)" />
+                    <path d="M120 34 C150 18, 190 38, 196 66 C202 94, 176 122, 140 112 C108 104, 92 70, 120 34Z" fill="rgba(255,195,0,0.08)" stroke="rgba(255,215,0,0.45)" />
+                    <path d="M52 63 L78 63" stroke="rgba(255,215,0,0.8)" stroke-width="3" stroke-linecap="round"/>
+                    <path d="M52 78 L92 78" stroke="rgba(255,195,0,0.85)" stroke-width="3" stroke-linecap="round"/>
+                    <circle cx="167" cy="78" r="10" fill="rgba(255,215,0,0.12)" stroke="rgba(255,215,0,0.65)"/>
+                    <path d="M160 78 L167 85 L178 70" fill="none" stroke="rgba(255,195,0,0.85)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+              </div>
+
+              <div class="softDivider" aria-hidden="true"></div>
+
+              <div class="controlRow">
+                <input id="jobUrl" class="urlInput" type="text" placeholder="https://..." />
+                <button id="analyzeBtn" class="primary" type="button">Analyze</button>
+              </div>
+
+              <div class="controlRow">
+                <button id="clearBtn" class="ghost" type="button">Clear</button>
+              </div>
+
+              <div class="help">URL is required. We extract text from the page and analyze it.</div>
+
+              <div class="divider"></div>
+
+              <div id="redFlagsSection" class="redFlagsSection" style="display:none;">
+                <div class="sectionLabel">🚩 Red Flags Detected</div>
+                <div id="redFlagsList" class="redFlagsList"></div>
+              </div>
+
+              <div id="safetyActionsSection" class="safetyActionsSection" style="display:none;">
+                <div class="sectionLabel">🛡️ Safety Actions</div>
+                <div id="safetyActionsList" class="safetyActionsList"></div>
+              </div>
+
+              <div id="safetyReminders" class="safetyReminders">
+                <div class="sectionLabel">✔ Safety reminders</div>
+                <div class="help">
+                  ✅ Never pay deposits or "processing fees".
+                </div>
+                <div class="help">⚠️ Verify the employer via official careers/email domains.</div>
+                <div class="help">❌ If they request crypto/wire/gift cards, treat as a scam.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="card results">
+              <div class="resultsTop">
+                <div class="resultsTitle">Result</div>
+                <div class="timing" id="timingMs"></div>
+              </div>
+
+              <div class="verdictRow">
+                <div id="riskDial" class="riskDial" aria-label="Risk score dial"></div>
+                <div class="verdictText">
+                  <div class="riskScore" id="riskScore">0</div>
+                  <div class="riskBand" id="riskBand">Low</div>
+                  <div id="safetyVerdict" class="safetyVerdict safe">SAFE</div>
+                  <div id="verdictDetail" class="verdictDetail"></div>
+                </div>
+              </div>
+
+              <div class="meterSmall" aria-label="Risk score meter">
+                <div id="riskBar" class="bar" style="width: 0%"></div>
+              </div>
+
+              <div id="scoreBreakdownSection" class="scoreBreakdown" style="display:none;">
+                <div class="sectionLabel">Why this score?</div>
+                <div id="scoreBreakdownList" class="scoreBreakdownList"></div>
+              </div>
+
+              <div class="summary" style="margin-top:12px;">
+                <div class="summaryLabel">Explanation</div>
+                <div id="explanationSummary" class="summaryText">Paste a URL and click <b>Analyze</b>.</div>
+              </div>
+
+              <div id="reportWrap" class="reportWrap">
+                <div class="reportLeft">
+                  <div class="sectionLabel">Report risky link</div>
+                  <div id="reportRiskCount" class="help" style="margin-top:4px;"></div>
+                </div>
+                <button id="reportRiskBtn" class="primary reportBtn" type="button">Report</button>
+              </div>
+
+              <div class="split">
+                <div class="subcard">
+                  <div class="sectionLabel">Gold / Silver signals</div>
+                  <div id="goldSilverSignals" class="summaryText"></div>
+                </div>
+                <div class="subcard">
+                  <div class="sectionLabel">Near risk factors</div>
+                  <ul id="nearRisks" class="bullets"></ul>
+                </div>
+              </div>
+
+              <div class="keywordsBlock" style="margin-top:10px;">
+                <div class="sectionLabel">Keyword highlighting</div>
+                <div id="preview" class="preview" aria-live="polite"></div>
+              </div>
+
+              <div class="split" style="margin-top:12px;">
+                <div class="subcard">
+                  <div class="sectionLabel">Suggestions</div>
+                  <ul id="suggestions" class="bullets"></ul>
+                </div>
+              </div>
+
+              <details style="margin-top:12px;" open>
+                <summary>All matched rules (explainable)</summary>
+                <div id="allMatches" class="list details"></div>
+              </details>
+
+              <div id="errorBox" class="errorBox" role="alert" style="display:none;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="viewHistory" class="view" aria-label="History view">
+        <div class="card">
+          <div class="cardHeader">
+            <div>
+              <div class="cardTitle">History</div>
+              <div class="cardSubtitle">Click an item to load its results instantly.</div>
+            </div>
+            <button id="clearHistoryBtn" class="ghost" type="button">Clear history</button>
+          </div>
+          <div id="historyList" class="historyList"></div>
+        </div>
+      </section>
+
+      <section id="viewSettings" class="view" aria-label="Settings view">
+        <div class="card">
+          <div class="cardHeader">
+            <div>
+              <div class="cardTitle">Settings</div>
+              <div class="cardSubtitle">Personalize your Scam Scout dashboard.</div>
+            </div>
+          </div>
+
+          <div class="settingsRow">
+            <div>
+              <div class="sectionLabel">Theme</div>
+              <div class="help" style="margin-top:4px;">Toggle between light and dark mode.</div>
+            </div>
+            <button id="themeToggle" class="ghost themeToggle" type="button">Toggle theme</button>
+          </div>
+
+          <div class="settingsRow">
+            <div>
+              <div class="sectionLabel">Data</div>
+              <div class="help" style="margin-top:4px;">Clear locally stored history and counters.</div>
+            </div>
+            <button id="clearHistoryBtnSettings" class="ghost" type="button">Clear history</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
