@@ -106,6 +106,7 @@ JOB_SITE_DOMAINS = [
     "naukri.com",
     "shine.com",
     "timesjobs.com",
+    "internshala.com",
 ]
 
 # Job-related URL path patterns
@@ -129,6 +130,7 @@ JOB_PATH_PATTERNS = [
     r"/current-openings",
     r"/job-details",
     r"/job-description",
+    r"/internship(s)?",
 ]
 
 # Job-related keywords in page content
