@@ -334,10 +334,44 @@ def _is_job_site_url(url: str) -> Tuple[bool, str]:
             return True, f"Job-related URL path detected"
     
     # Check for common career/job subdomains
-    job_subdomains = ["jobs", "careers", "hiring", "recruitment", "talent", "apply"]
+    job_subdomains = ["jobs", "careers", "hiring", "recruitment", "talent", "apply", "employment", "workwithus", "joinus"]
     for subdomain in job_subdomains:
         if host.startswith(subdomain + ".") or f".{subdomain}." in host:
             return True, f"Job-related subdomain detected: {subdomain}"
+    
+    # Additional check: Look for job-related keywords in the full URL
+    # This catches cases like "company.com/job/12345" or "site.com/careers/position"
+    url_lower = url.lower()
+    job_keywords_in_url = [
+        "/job/", "/jobs/", "/career/", "/careers/", "/position/", "/positions/",
+        "/opening/", "/openings/", "/vacancy/", "/vacancies/", "/opportunity/",
+        "/opportunities/", "/employment/", "/hiring/", "/apply/", "/recruit/"
+    ]
+    for keyword in job_keywords_in_url:
+        if keyword in url_lower:
+            return True, f"Job-related keyword found in URL path"
+    
+    # Check for common ATS (Applicant Tracking System) patterns
+    # Many companies use subdomains like "boards.greenhouse.io" or "jobs.lever.co"
+    ats_patterns = [
+        r"\.lever\.co",
+        r"\.greenhouse\.io",
+        r"\.workday\.com",
+        r"\.myworkdayjobs\.com",
+        r"\.icims\.com",
+        r"\.jobvite\.com",
+        r"\.taleo\.net",
+        r"\.brassring\.com",
+        r"\.smartrecruiters\.com",
+        r"\.breezy\.hr",
+        r"\.ashbyhq\.com",
+        r"\.recruitee\.com",
+        r"\.teamtailor\.com",
+        r"\.applytojob\.com",
+    ]
+    for pattern in ats_patterns:
+        if re.search(pattern, host, re.IGNORECASE):
+            return True, f"Applicant Tracking System (ATS) detected"
     
     return False, "This URL does not appear to be from a job site"
 
