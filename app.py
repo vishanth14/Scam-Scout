@@ -27,13 +27,19 @@ def create_app() -> Flask:
         payload: Dict[str, Any] = request.get_json(silent=True) or {}
         job_text = payload.get("job_text", "")
         job_url = payload.get("job_url", None)
+        analysis_mode = payload.get("analysis_mode", "hybrid")
 
         if not (isinstance(job_text, str) and job_text.strip()) and not (isinstance(job_url, str) and job_url.strip()):
             return jsonify({"error": "Provide either 'job_text' or 'job_url'"}), 400
 
+        # Validate analysis mode
+        if analysis_mode not in ["nlp", "rules", "hybrid"]:
+            analysis_mode = "hybrid"
+
         result = analyzer.analyze(
             job_text=job_text if isinstance(job_text, str) else "",
             job_url=job_url if isinstance(job_url, str) and job_url.strip() else None,
+            analysis_mode=analysis_mode,
         )
         return jsonify(result)
 

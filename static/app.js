@@ -158,7 +158,16 @@ function renderFromResult(data) {
   if (!data) return;
 
   setRiskUI(data.risk_score, data.risk_band, data.verdict, data.verdict_detail);
-  $("timingMs").textContent = data.timing_ms != null ? "Analysis time: " + data.timing_ms + " ms" : "";
+  
+  // Display timing and analysis mode
+  const modeLabels = {
+    "hybrid": "🔀 Hybrid",
+    "nlp": "🤖 NLP",
+    "rules": "📋 Rules"
+  };
+  const modeLabel = modeLabels[data.analysis_mode] || "🔀 Hybrid";
+  $("timingMs").textContent = data.timing_ms != null ? `${modeLabel} • ${data.timing_ms} ms` : modeLabel;
+  
   $("explanationSummary").textContent = data.explanation_summary || "";
 
   const redFlags = data.red_flags || [];
@@ -351,8 +360,12 @@ async function analyzeCurrentText() {
   if (!jobUrl) {
     $("errorBox").textContent = "Please paste a job URL first (description is optional).";
     $("errorBox").style.display = "block";
+    $("errorBox").className = "errorBox";
     return;
   }
+
+  // Get selected analysis mode
+  const analysisMode = document.querySelector('input[name="analysisMode"]:checked')?.value || "hybrid";
 
   setLoading(true);
 
@@ -360,13 +373,29 @@ async function analyzeCurrentText() {
     const res = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_url: jobUrl }),
+      body: JSON.stringify({ job_url: jobUrl, analysis_mode: analysisMode }),
     });
     const data = await res.json();
 
-    if (!res.ok) {
-      $("errorBox").textContent = data.error || "Analysis failed.";
-      $("errorBox").style.display = "block";
+    if (!res.ok || data.error) {
+      // Handle "not a job site" error with special styling
+      if (data.error === "not_a_job_site") {
+        $("errorBox").innerHTML = '<div class="notJobSiteIcon">🔍</div>' +
+          '<div class="notJobSiteTitle">' + escapeHtml(data.error_message || "Not a Job Site") + '</div>' +
+          '<div class="notJobSiteDetail">' + escapeHtml(data.error_detail || "") + '</div>' +
+          '<div class="notJobSiteSuggestion">' + escapeHtml(data.suggestion || "") + '</div>';
+        $("errorBox").className = "errorBox notJobSiteError";
+        $("errorBox").style.display = "block";
+        
+        // Reset the results panel to show the error state
+        setRiskUI(0, "Low", "NOT A JOB SITE", data.verdict_detail || "The provided URL is not recognized as a job-related website.");
+        $("explanationSummary").textContent = "Scam Scout only analyzes job postings for potential scams.";
+        $("timingMs").textContent = data.timing_ms != null ? "Analysis time: " + data.timing_ms + " ms" : "";
+      } else {
+        $("errorBox").textContent = data.error || data.error_message || "Analysis failed.";
+        $("errorBox").className = "errorBox";
+        $("errorBox").style.display = "block";
+      }
       setLoading(false);
       return;
     }
@@ -389,6 +418,7 @@ async function analyzeCurrentText() {
 
   } catch (e) {
     $("errorBox").textContent = "Request failed: " + (e?.message || String(e));
+    $("errorBox").className = "errorBox";
     $("errorBox").style.display = "block";
   } finally {
     setLoading(false);

@@ -64,10 +64,46 @@
 
               <div class="controlRow">
                 <input id="jobUrl" class="urlInput" type="text" placeholder="https://..." />
-                <button id="analyzeBtn" class="primary" type="button">Analyze</button>
+              </div>
+
+              <div class="analysisModeSection">
+                <div class="sectionLabel">Analysis Mode</div>
+                <div class="analysisModeOptions">
+                  <label class="modeOption">
+                    <input type="radio" name="analysisMode" value="hybrid" checked />
+                    <span class="modeLabel">
+                      <span class="modeIcon">🔀</span>
+                      <span class="modeText">
+                        <span class="modeTitle">Hybrid</span>
+                        <span class="modeDesc">NLP + Rules (Recommended)</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="modeOption">
+                    <input type="radio" name="analysisMode" value="nlp" />
+                    <span class="modeLabel">
+                      <span class="modeIcon">🤖</span>
+                      <span class="modeText">
+                        <span class="modeTitle">NLP Only</span>
+                        <span class="modeDesc">AI-powered detection</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="modeOption">
+                    <input type="radio" name="analysisMode" value="rules" />
+                    <span class="modeLabel">
+                      <span class="modeIcon">📋</span>
+                      <span class="modeText">
+                        <span class="modeTitle">Rules Only</span>
+                        <span class="modeDesc">Pattern-based detection</span>
+                      </span>
+                    </span>
+                  </label>
+                </div>
               </div>
 
               <div class="controlRow">
+                <button id="analyzeBtn" class="primary" type="button">Analyze</button>
                 <button id="clearBtn" class="ghost" type="button">Clear</button>
               </div>
 

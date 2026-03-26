@@ -16,6 +16,152 @@ from rules import analyze_rules, risk_band_from_score
 
 logger = logging.getLogger(__name__)
 
+# Known job site domains and patterns
+JOB_SITE_DOMAINS = [
+    # Major job boards
+    "linkedin.com",
+    "indeed.com",
+    "glassdoor.com",
+    "monster.com",
+    "ziprecruiter.com",
+    "careerbuilder.com",
+    "simplyhired.com",
+    "dice.com",
+    "angel.co",
+    "wellfound.com",
+    "upwork.com",
+    "freelancer.com",
+    "fiverr.com",
+    "flexjobs.com",
+    "remote.co",
+    "weworkremotely.com",
+    "remoteok.com",
+    "workingnomads.com",
+    "jobspresso.co",
+    "eurojobs.com",
+    "jobserve.com",
+    "techjobs.com",
+    "stackoverflow.com/jobs",
+    "github.com/careers",
+    
+    # ATS (Applicant Tracking Systems) - commonly used by companies
+    "lever.co",
+    "greenhouse.io",
+    "workday.com",
+    "myworkdayjobs.com",
+    "icims.com",
+    "jobvite.com",
+    "taleo.net",
+    "brassring.com",
+    "ultipro.com",
+    "smartrecruiters.com",
+    "breezy.hr",
+    "ashbyhq.com",
+    "recruitee.com",
+    "teamtailor.com",
+    "applytojob.com",
+    "jobs.lever.co",
+    "boards.greenhouse.io",
+    "careers.google.com",
+    "amazon.jobs",
+    "jobs.careers.microsoft.com",
+    "metacareers.com",
+    "apple.com/careers",
+    "careers.twitter.com",
+    "careers.facebook.com",
+    "careers.netflix.com",
+    "jobs.spotify.com",
+    "careers.uber.com",
+    "lyft.com/careers",
+    "careers.airbnb.com",
+    
+    # Government and educational job sites
+    "usajobs.gov",
+    "governmentjobs.com",
+    "higheredjobs.com",
+    "chroniclevitae.com",
+    "academicpositions.com",
+    "jobs.ac.uk",
+    
+    # Industry-specific
+    "healthcareers.com",
+    "mediabistro.com",
+    "journalismjobs.com",
+    "idealist.org",
+    "devex.com",
+    "reliefweb.int",
+    "conservationjobboard.com",
+    "environmentalcareer.com",
+    
+    # Regional job sites
+    "seek.com.au",
+    "reed.co.uk",
+    "totaljobs.com",
+    "cv-library.co.uk",
+    "jobsite.co.uk",
+    "stepstone.de",
+    "xing.com",
+    "infojobs.net",
+    "catho.com.br",
+    "naukri.com",
+    "shine.com",
+    "timesjobs.com",
+]
+
+# Job-related URL path patterns
+JOB_PATH_PATTERNS = [
+    r"/jobs?",
+    r"/careers?",
+    r"/positions?",
+    r"/openings?",
+    r"/vacanc(y|ies)",
+    r"/opportunities",
+    r"/employment",
+    r"/hiring",
+    r"/apply",
+    r"/job-listing",
+    r"/job-search",
+    r"/job-board",
+    r"/recruit",
+    r"/work-with-us",
+    r"/join-us",
+    r"/join-our-team",
+    r"/current-openings",
+    r"/job-details",
+    r"/job-description",
+]
+
+# Job-related keywords in page content
+JOB_CONTENT_KEYWORDS = [
+    "job description",
+    "responsibilities",
+    "qualifications",
+    "requirements",
+    "experience required",
+    "salary",
+    "compensation",
+    "benefits",
+    "full-time",
+    "part-time",
+    "contract",
+    "permanent",
+    "temporary",
+    "remote",
+    "hybrid",
+    "on-site",
+    "apply now",
+    "submit application",
+    "equal opportunity",
+    "eeo",
+    "applicant",
+    "candidate",
+    "interview",
+    "hiring manager",
+    "recruiter",
+    "human resources",
+    "hr department",
+]
+
 MAX_FETCH_BYTES = 2_000_000
 FETCH_TIMEOUT_S = 8
 MAX_ANALYSIS_CHARS = 12_000
@@ -158,6 +304,63 @@ def _extract_background_snippet(analysis_text: str) -> Optional[str]:
     return analysis_text[start:end].strip() or None
 
 
+def _is_job_site_url(url: str) -> Tuple[bool, str]:
+    """
+    Check if the URL is from a known job site or contains job-related patterns.
+    Returns (is_job_site, reason)
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False, "Invalid URL format"
+    
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    
+    # Remove 'www.' prefix for matching
+    if host.startswith("www."):
+        host = host[4:]
+    
+    # Check against known job site domains
+    for job_domain in JOB_SITE_DOMAINS:
+        job_domain_lower = job_domain.lower()
+        # Check if host ends with or contains the job domain
+        if host == job_domain_lower or host.endswith("." + job_domain_lower):
+            return True, f"Known job site: {job_domain}"
+    
+    # Check for job-related path patterns
+    for pattern in JOB_PATH_PATTERNS:
+        if re.search(pattern, path, re.IGNORECASE):
+            return True, f"Job-related URL path detected"
+    
+    # Check for common career/job subdomains
+    job_subdomains = ["jobs", "careers", "hiring", "recruitment", "talent", "apply"]
+    for subdomain in job_subdomains:
+        if host.startswith(subdomain + ".") or f".{subdomain}." in host:
+            return True, f"Job-related subdomain detected: {subdomain}"
+    
+    return False, "This URL does not appear to be from a job site"
+
+
+def _is_job_content(text: str) -> Tuple[bool, int]:
+    """
+    Check if the text content appears to be job-related.
+    Returns (is_job_content, keyword_match_count)
+    """
+    if not text:
+        return False, 0
+    
+    text_lower = text.lower()
+    match_count = 0
+    
+    for keyword in JOB_CONTENT_KEYWORDS:
+        if keyword.lower() in text_lower:
+            match_count += 1
+    
+    # Consider it job content if at least 3 job-related keywords are found
+    return match_count >= 3, match_count
+
+
 @lru_cache(maxsize=32)
 def _fetch_and_extract_url_context(job_url: str) -> UrlExtraction:
     parsed = urllib.parse.urlparse(job_url)
@@ -268,7 +471,7 @@ def _select_top_contributing_rules(matches: List[Dict[str, Any]], limit: int = 4
     return [x[2] for x in scored[:limit]]
 
 
-def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious_keywords: List[str], suggestions: List[str], nlp_score: int, nlp_debug: Optional[Dict[str, Any]], final_score: int) -> Dict[str, Any]:
+def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious_keywords: List[str], suggestions: List[str], nlp_score: int, nlp_debug: Optional[Dict[str, Any]], final_score: int, analysis_mode: str = "hybrid") -> Dict[str, Any]:
     risk_band = risk_band_from_score(final_score)
     top_rules = _select_top_contributing_rules(matches)
     top_rule_descriptions = []
@@ -277,8 +480,47 @@ def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious
         top_rule_descriptions.append(f"{r['title']} (e.g. {', '.join(phrases)})" if phrases else r["title"])
     
     nlp_available = bool(nlp_debug and nlp_debug.get("available"))
-    nlp_note = "NLP model not available; using rule-based signals only." if not nlp_available else "NLP model contributed a probability estimate."
-    explanation_summary = f"{risk_band} risk: {nlp_note} Top signals: {', '.join(top_rule_descriptions) if top_rule_descriptions else 'no strong pattern matches'}."
+    
+    # Generate different explanations based on analysis mode
+    if analysis_mode == "nlp":
+        # NLP-only mode explanation
+        nlp_confidence = abs(nlp_score - 50)  # Distance from neutral (50)
+        if nlp_score >= 70:
+            ai_assessment = "AI model detected strong indicators of a fraudulent job posting"
+        elif nlp_score >= 55:
+            ai_assessment = "AI model identified some suspicious patterns commonly found in scam jobs"
+        elif nlp_score >= 45:
+            ai_assessment = "AI model analysis shows mixed signals with slight concerns"
+        elif nlp_score >= 30:
+            ai_assessment = "AI model suggests this posting has mostly legitimate characteristics"
+        else:
+            ai_assessment = "AI model indicates this appears to be a genuine job posting"
+        
+        explanation_summary = f"{risk_band} risk: {ai_assessment}. NLP confidence: {nlp_confidence}%. This analysis uses deep learning to detect linguistic patterns associated with job scams."
+        
+    elif analysis_mode == "rules":
+        # Rules-only mode explanation
+        if not top_rule_descriptions:
+            explanation_summary = f"{risk_band} risk: No suspicious patterns detected by rule-based analysis. The posting doesn't match known scam indicators like upfront payments, urgency tactics, or unrealistic promises."
+        else:
+            pattern_count = len(matches)
+            if pattern_count >= 4:
+                pattern_assessment = f"Multiple red flags detected ({pattern_count} patterns matched)"
+            elif pattern_count >= 2:
+                pattern_assessment = f"Several concerning patterns identified ({pattern_count} matches)"
+            else:
+                pattern_assessment = f"Some suspicious elements found ({pattern_count} pattern matched)"
+            
+            explanation_summary = f"{risk_band} risk: {pattern_assessment}. Key indicators: {', '.join(top_rule_descriptions[:3])}. This analysis checks for known scam tactics like gift card requests, chat-only communication, and guaranteed employment claims."
+    
+    else:
+        # Hybrid mode explanation (default)
+        nlp_note = "NLP model not available; using rule-based signals only." if not nlp_available else "AI model contributed a probability estimate."
+        
+        if top_rule_descriptions:
+            explanation_summary = f"{risk_band} risk: {nlp_note} Combined analysis found {len(matches)} pattern(s): {', '.join(top_rule_descriptions[:2])}. Hybrid mode provides the most comprehensive detection by combining AI language analysis with known scam pattern matching."
+        else:
+            explanation_summary = f"{risk_band} risk: {nlp_note} No strong pattern matches detected. Hybrid analysis combines AI assessment with rule-based checks for thorough evaluation."
     
     return {"risk_band": risk_band, "explanation_summary": explanation_summary, "rule_score": rule_score, "nlp_score": nlp_score, "matches": matches, "top_rules": top_rules, "suspicious_keywords": suspicious_keywords, "suggestions": suggestions[:6], "nlp_debug": nlp_debug}
 
@@ -320,8 +562,24 @@ class JobAnalyzer:
     def force_nlp_retry(self) -> Dict[str, Any]:
         return self.nlp_status()
 
-    def analyze(self, job_text: str, job_url: Optional[str] = None) -> Dict[str, Any]:
+    def analyze(self, job_text: str, job_url: Optional[str] = None, analysis_mode: str = "hybrid") -> Dict[str, Any]:
         start = time.time()
+        
+        # Check if URL is provided and validate it's a job site
+        if job_url:
+            is_job_site, reason = _is_job_site_url(job_url)
+            if not is_job_site:
+                return {
+                    "error": "not_a_job_site",
+                    "error_message": "This URL does not appear to be from a job site",
+                    "error_detail": reason,
+                    "suggestion": "Please enter a URL from a job board (e.g., LinkedIn, Indeed, Glassdoor) or a company careers page.",
+                    "risk_score": None,
+                    "verdict": "NOT A JOB SITE",
+                    "verdict_detail": "The provided URL is not recognized as a job-related website. Scam Scout only analyzes job postings for potential scams.",
+                    "timing_ms": int(round((time.time() - start) * 1000)),
+                    "analysis_mode": analysis_mode
+                }
         
         url_ctx: Optional[UrlExtraction] = None
         if job_url:
@@ -331,12 +589,28 @@ class JobAnalyzer:
         prepared_for_scoring = _normalize_text_for_scoring(job_text)
         analysis_excerpt_for_highlight = _safe_excerpt(prepared_for_scoring, MAX_EXCERPT_CHARS)
         
+        # Calculate scores based on analysis mode
         rule_score, matches, suspicious_keywords, suggestions = analyze_rules(prepared_for_scoring)
         nlp_score, label_scores, nlp_debug = self.classifier.predict(prepared_for_scoring, rule_score)
         
-        final_score = max(0, min(100, int(round(0.6 * rule_score + 0.4 * nlp_score))))
+        # Adjust final score based on analysis mode
+        if analysis_mode == "nlp":
+            # NLP only - use NLP score with minimal rule influence
+            final_score = max(0, min(100, int(round(0.9 * nlp_score + 0.1 * rule_score))))
+            explanation_summary_suffix = " (NLP mode)"
+        elif analysis_mode == "rules":
+            # Rules only - use rule score only
+            final_score = max(0, min(100, rule_score))
+            explanation_summary_suffix = " (Rules mode)"
+        else:
+            # Hybrid mode - use both NLP and rules (default)
+            final_score = max(0, min(100, int(round(0.6 * rule_score + 0.4 * nlp_score))))
+            explanation_summary_suffix = " (Hybrid mode)"
         
-        explanation = build_explanation(rule_score, matches, suspicious_keywords, suggestions, nlp_score, nlp_debug, final_score)
+        explanation = build_explanation(rule_score, matches, suspicious_keywords, suggestions, nlp_score, nlp_debug, final_score, analysis_mode)
+        # Add mode indicator to explanation summary
+        explanation["explanation_summary"] = explanation.get("explanation_summary", "") + explanation_summary_suffix
+        
         highlight_keywords = list(explanation["suspicious_keywords"])[:25]
         verdict, verdict_detail = _verdict_from_signals(explanation["risk_band"], explanation["rule_score"], explanation["matches"])
         
@@ -364,13 +638,14 @@ class JobAnalyzer:
             "rule_score": explanation["rule_score"],
             "nlp_score": explanation["nlp_score"],
             "nlp": {"model_name": nlp_debug.get("model_name"), "label_scores": label_scores, "available": True, "error": None},
-            "ai_used": True,
+            "ai_used": analysis_mode in ["nlp", "hybrid"],
+            "analysis_mode": analysis_mode,
             "explanation_summary": explanation["explanation_summary"],
-            "matches": explanation["matches"],
-            "top_rules": explanation["top_rules"],
-            "suspicious_keywords": suspicious_keywords,
-            "highlight_keywords": highlight_keywords,
-            "suggestions": explanation["suggestions"],
+            "matches": explanation["matches"] if analysis_mode in ["rules", "hybrid"] else [],
+            "top_rules": explanation["top_rules"] if analysis_mode in ["rules", "hybrid"] else [],
+            "suspicious_keywords": suspicious_keywords if analysis_mode in ["rules", "hybrid"] else [],
+            "highlight_keywords": highlight_keywords if analysis_mode in ["rules", "hybrid"] else [],
+            "suggestions": explanation["suggestions"] if analysis_mode in ["rules", "hybrid"] else [],
             "timing_ms": timing_ms,
             "verdict": verdict,
             "verdict_detail": verdict_detail,
@@ -379,8 +654,8 @@ class JobAnalyzer:
             "near_risk_factors": near_risk_factors,
             "company_background_snippet": company_background_snippet,
             "analysis_excerpt_for_highlight": analysis_excerpt_for_highlight,
-            "red_flags": red_flags,
-            "safety_actions": safety_actions,
-            "score_breakdown": score_breakdown,
+            "red_flags": red_flags if analysis_mode in ["rules", "hybrid"] else [],
+            "safety_actions": safety_actions if analysis_mode in ["rules", "hybrid"] else [],
+            "score_breakdown": score_breakdown if analysis_mode in ["rules", "hybrid"] else [],
             "url_context": {"job_url": job_url, "host": url_ctx.host if url_ctx else None, "company_name_guess": url_ctx.company_name_guess if url_ctx else None, "fetched_ok": bool(url_ctx.fetched_ok) if url_ctx else False, "fetch_error": url_ctx.fetch_error if url_ctx else None}
         }
