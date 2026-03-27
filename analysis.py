@@ -210,6 +210,316 @@ class _HTMLTextExtractor(HTMLParser):
         return text[:max_chars - 1].rstrip() + "…" if len(text) > max_chars else text
 
 
+class _JobDescriptionExtractor(HTMLParser):
+    """
+    Extracts only job-related content from HTML by targeting specific tags
+    and class names commonly used for job descriptions.
+    Excludes header, footer, nav, and other non-content sections.
+    Specifically targets job-related headings like "About the job", "About the company", etc.
+    """
+    def __init__(self) -> None:
+        super().__init__()
+        self._chunks: List[str] = []
+        # Tags to completely skip (including their content)
+        self._skip_tags = {"script", "style", "noscript", "nav", "header", "footer", "aside", "form"}
+        self._skip_depth = 0
+        self._in_job_section = False
+        self._job_section_depth = 0
+        self._current_depth = 0
+        self._collecting_data = False
+        self._current_section_name = ""
+        self._section_stack: List[str] = []
+        
+        # Tags that typically contain job descriptions
+        self._job_tags = {"article", "main", "section"}
+        
+        # Job-related heading patterns (case-insensitive)
+        self._job_heading_patterns = [
+            "about the job", "about the role", "about the position",
+            "about the company", "about us", "company overview",
+            "job description", "job summary", "role description",
+            "responsibilities", "key responsibilities", "duties",
+            "qualifications", "requirements", "skills required",
+            "experience", "experience required", "preferred qualifications",
+            "education", "education required",
+            "benefits", "perks", "compensation", "salary",
+            "how to apply", "application process",
+            "equal opportunity", "eeo statement",
+            "about the team", "team overview",
+            "location", "work location", "job location",
+            "employment type", "job type", "position type",
+            "remote", "hybrid", "on-site",
+            "full-time", "part-time", "contract", "temporary",
+            "who we are", "what we do", "our mission", "our values",
+            "overview", "description", "summary", "details",
+            "what you'll do", "what you will do", "your role",
+            "who you are", "ideal candidate", "preferred skills",
+            "required skills", "minimum qualifications", "preferred qualifications",
+            "additional information", "other information", "notes"
+        ]
+        
+        # Class name patterns that indicate job content
+        self._job_class_patterns = [
+            "job", "description", "content", "details", "posting", "listing",
+            "career", "position", "opening", "vacancy", "responsibilities",
+            "qualifications", "requirements", "about", "role", "opportunity",
+            "section", "article", "main-content", "job-content", "job-details",
+            "job-description", "job-summary", "job-overview", "job-info",
+            "posting-content", "listing-content", "career-content"
+        ]
+        
+        # Class/id patterns to exclude (navigation, header, footer elements)
+        self._exclude_patterns = [
+            "nav", "header", "footer", "sidebar", "menu", "cookie", "banner",
+            "login", "signup", "search", "social", "share", "comment", "widget",
+            "related", "similar", "recommended", "suggested", "apply-button",
+            "share-button", "save-button", "bookmark"
+        ]
+    
+    def _is_job_class(self, class_attr: Optional[str]) -> bool:
+        if not class_attr:
+            return False
+        class_lower = class_attr.lower()
+        # First check if it should be excluded
+        if any(pattern in class_lower for pattern in self._exclude_patterns):
+            return False
+        return any(pattern in class_lower for pattern in self._job_class_patterns)
+    
+    def _should_exclude(self, attrs_dict: Dict[str, str]) -> bool:
+        """Check if element should be excluded based on class/id patterns."""
+        class_attr = attrs_dict.get("class", "").lower()
+        id_attr = attrs_dict.get("id", "").lower()
+        
+        for pattern in self._exclude_patterns:
+            if pattern in class_attr or pattern in id_attr:
+                return True
+        return False
+    
+    def _is_job_heading(self, text: str) -> bool:
+        """Check if text matches a job-related heading pattern."""
+        if not text:
+            return False
+        text_lower = text.lower().strip()
+        # Remove common markdown/formatting characters
+        text_clean = re.sub(r'[#*_~`]', '', text_lower).strip()
+        return any(pattern in text_clean for pattern in self._job_heading_patterns)
+    
+    def _get_section_name(self, text: str) -> str:
+        """Extract section name from heading text."""
+        if not text:
+            return ""
+        text_lower = text.lower().strip()
+        text_clean = re.sub(r'[#*_~`]', '', text_lower).strip()
+        
+        # Match against known patterns and return the matched pattern
+        for pattern in self._job_heading_patterns:
+            if pattern in text_clean:
+                return pattern
+        return ""
+    
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        tag_lower = tag.lower()
+        self._current_depth += 1
+        
+        if tag_lower in self._skip_tags:
+            self._skip_depth += 1
+            return
+        
+        # Check if this element should be excluded
+        attrs_dict = {k.lower(): v for k, v in attrs if v}
+        if self._should_exclude(attrs_dict):
+            self._skip_depth += 1
+            return
+        
+        # Check if this is a job-related section
+        class_attr = attrs_dict.get("class", "")
+        id_attr = attrs_dict.get("id", "")
+        
+        # Check for job-related tags or classes
+        is_job_tag = tag_lower in self._job_tags
+        is_job_class = self._is_job_class(class_attr) or self._is_job_class(id_attr)
+        
+        if (is_job_tag or is_job_class) and not self._in_job_section:
+            self._in_job_section = True
+            self._job_section_depth = self._current_depth
+        
+        # Add newline for block elements when in job section
+        if self._in_job_section and tag_lower in {"p", "br", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._chunks.append("\n")
+    
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        
+        if tag_lower in self._skip_tags and self._skip_depth > 0:
+            self._skip_depth -= 1
+        
+        # Exit job section when we close the container
+        if self._in_job_section and self._current_depth <= self._job_section_depth:
+            self._in_job_section = False
+            self._current_section_name = ""
+        
+        self._current_depth -= 1
+    
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth > 0 or not data:
+            return
+        
+        # Only collect text when inside a job-related section
+        if self._in_job_section:
+            # Check if this is a job-related heading
+            if self._is_job_heading(data):
+                self._collecting_data = True
+                section_name = self._get_section_name(data)
+                if section_name:
+                    self._current_section_name = section_name
+                self._chunks.append("\n" + data.strip() + "\n")
+            elif self._collecting_data:
+                # Continue collecting data after a job heading
+                self._chunks.append(html.unescape(data))
+    
+    def get_text(self, max_chars: int) -> str:
+        text = re.sub(r"[ \t\r\f\v]+", " ", "".join(self._chunks))
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        return text[:max_chars - 1].rstrip() + "…" if len(text) > max_chars else text
+    
+    def has_content(self) -> bool:
+        return len(self._chunks) > 0
+
+
+# Navigation and irrelevant words to filter out
+NAVIGATION_WORDS = {
+    "login", "log in", "sign in", "signin", "signup", "sign up", "register",
+    "home", "about", "contact", "menu", "navigation", "search", "skip",
+    "cookie", "privacy", "terms", "copyright", "©", "all rights",
+    "loading", "please wait", "click here", "read more", "learn more",
+    "subscribe", "newsletter", "follow us", "share", "tweet", "like",
+    "facebook", "twitter", "linkedin", "instagram", "youtube",
+    "accept", "decline", "agree", "disagree", "ok", "cancel", "close",
+    "submit", "reset", "clear", "back", "next", "previous", "continue"
+}
+
+
+def _clean_extracted_text(text: str) -> str:
+    """
+    Clean extracted text by removing:
+    - Excessive whitespace
+    - Repeated words/phrases
+    - Navigation words
+    - Empty lines
+    - Duplicate content
+    - Non-job-related content
+    """
+    if not text:
+        return ""
+    
+    # Normalize whitespace
+    cleaned = re.sub(r"[ \t\r\f\v]+", " ", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    
+    # Split into lines and filter
+    lines = cleaned.split("\n")
+    filtered_lines = []
+    seen_content = set()  # Track seen content to avoid duplicates
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Skip lines that are just navigation words
+        line_lower = line.lower()
+        words_in_line = set(line_lower.split())
+        
+        # Skip if line is too short
+        if len(line) < 15:
+            continue
+        
+        # Skip if mostly navigation words
+        nav_word_count = sum(1 for w in words_in_line if w in NAVIGATION_WORDS)
+        if len(words_in_line) > 0 and nav_word_count / len(words_in_line) > 0.4:
+            continue
+        
+        # Normalize for duplicate detection (remove extra spaces, lowercase)
+        normalized = re.sub(r'\s+', ' ', line_lower).strip()
+        
+        # Skip if we've seen very similar content
+        if normalized in seen_content:
+            continue
+        
+        # Skip lines that are just repeated words (e.g., "Apply Apply Apply")
+        words = normalized.split()
+        if len(words) >= 3:
+            word_counts = {}
+            for w in words:
+                word_counts[w] = word_counts.get(w, 0) + 1
+            # If any word appears more than 40% of the time, it's repetitive
+            max_count = max(word_counts.values())
+            if max_count / len(words) > 0.4:
+                continue
+        
+        # Skip lines with excessive repetition of short phrases
+        if re.search(r'\b(\w{1,10})\s+\1\s+\1\b', normalized):
+            continue
+        
+        seen_content.add(normalized)
+        filtered_lines.append(line)
+    
+    # Remove consecutive duplicate lines
+    deduped_lines = []
+    prev_line = None
+    for line in filtered_lines:
+        if line != prev_line:
+            deduped_lines.append(line)
+        prev_line = line
+    
+    result = "\n".join(deduped_lines).strip()
+    
+    # Remove repeated phrases anywhere in text (e.g., "Apply Now Apply Now Apply Now")
+    result = re.sub(r'\b(\w+(?:\s+\w+){1,3})\s+\1\s+\1\b', r'\1', result, flags=re.IGNORECASE)
+    
+    # Remove excessive repetition of single words
+    result = re.sub(r'\b(\w{3,})\s+\1\s+\1(?:\s+\1)*\b', r'\1', result, flags=re.IGNORECASE)
+    
+    return result
+
+
+def _extract_job_description_from_html(html_text: str, max_chars: int = 1500) -> str:
+    """
+    Extract only job description content from HTML.
+    Tries multiple strategies:
+    1. Target specific job-related tags and classes
+    2. Fallback to first few paragraphs if no job section found
+    """
+    # Strategy 1: Try job-specific extraction
+    job_extractor = _JobDescriptionExtractor()
+    try:
+        job_extractor.feed(html_text)
+    except Exception:
+        pass
+    
+    if job_extractor.has_content():
+        text = job_extractor.get_text(max_chars)
+        cleaned = _clean_extracted_text(text)
+        if len(cleaned) >= 100:  # Minimum viable content
+            return cleaned[:max_chars]
+    
+    # Strategy 2: Fallback - extract first meaningful paragraphs
+    fallback_extractor = _HTMLTextExtractor()
+    try:
+        fallback_extractor.feed(html_text)
+    except Exception:
+        pass
+    
+    full_text = fallback_extractor.get_text(max_chars * 3)  # Get more to filter
+    
+    # Take first 2-3 substantial paragraphs
+    paragraphs = [p.strip() for p in full_text.split("\n\n") if len(p.strip()) >= 50]
+    fallback_text = "\n\n".join(paragraphs[:3])
+    
+    cleaned = _clean_extracted_text(fallback_text)
+    return cleaned[:max_chars]
+
+
 def _is_private_ip(ip_str: str) -> bool:
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -421,20 +731,31 @@ def _fetch_and_extract_url_context(job_url: str) -> UrlExtraction:
     except Exception as e:
         return _empty_ctx(f"{type(e).__name__}: {e}")
     
-    extractor = _HTMLTextExtractor()
-    try:
-        extractor.feed(html_text)
-    except Exception:
-        pass
+    # Extract only job description content (not entire webpage)
+    # Limit to 1500 characters for cleaner highlighting
+    job_description_text = _extract_job_description_from_html(html_text, max_chars=1500)
     
+    # Also get meta descriptions for additional context
     meta_descs = _extract_meta_descriptions(html_text)
-    extracted_text = extractor.get_text(max_chars=24_000)
-    combined = "\n".join([d for d in meta_descs if d] + [extracted_text]).strip()
+    
+    # Combine job description with meta descriptions
+    combined = "\n".join([d for d in meta_descs if d] + [job_description_text]).strip()
     combined_norm = _normalize_text_for_scoring(combined)
+    
+    # Extract background snippet for company signals
     background = _extract_background_snippet(combined_norm)
     gold_signals, silver_signals = _derive_company_signals(background or "")
     
-    return UrlExtraction(host=host, company_name_guess=company_name_guess, fetched_ok=True, fetch_error=None, job_page_text=combined_norm, company_background_snippet=background, gold_signals=gold_signals, silver_signals=silver_signals)
+    return UrlExtraction(
+        host=host, 
+        company_name_guess=company_name_guess, 
+        fetched_ok=True, 
+        fetch_error=None, 
+        job_page_text=combined_norm, 
+        company_background_snippet=background, 
+        gold_signals=gold_signals, 
+        silver_signals=silver_signals
+    )
 
 
 class SimulatedNLPClassifier:
