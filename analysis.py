@@ -275,6 +275,13 @@ class _JobDescriptionExtractor(HTMLParser):
             "related", "similar", "recommended", "suggested", "apply-button",
             "share-button", "save-button", "bookmark"
         ]
+        
+        # Patterns to exclude from content (violation, rules, complaints, etc.)
+        self._exclude_content_patterns = [
+            "violation", "rules", "complaints", "login", "signup", "footer", 
+            "email", "contact", "privacy", "terms", "copyright", "legal",
+            "warning", "notice", "alert", "important", "disclaimer"
+        ]
     
     def _is_job_class(self, class_attr: Optional[str]) -> bool:
         if not class_attr:
@@ -408,6 +415,10 @@ def _clean_extracted_text(text: str) -> str:
     - Empty lines
     - Duplicate content
     - Non-job-related content
+    - Emails and platform warnings
+    - Lines with excluded content patterns
+    - UI noise and system text
+    - Repeated "Posted ..." lines
     """
     if not text:
         return ""
@@ -416,18 +427,81 @@ def _clean_extracted_text(text: str) -> str:
     cleaned = re.sub(r"[ \t\r\f\v]+", " ", text)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     
+    # Patterns to exclude from content (UI noise, system text, etc.)
+    exclude_content_patterns = [
+        "violation", "rules", "complaints", "login", "signup", "footer", 
+        "email", "contact", "privacy", "terms", "copyright", "legal",
+        "warning", "notice", "alert", "important", "disclaimer",
+        "internshala", "platform", "website", "app", "mobile app",
+        "download", "install", "register", "sign up", "log in",
+        "subscribe", "newsletter", "follow us", "share", "tweet",
+        "facebook", "twitter", "linkedin", "instagram", "youtube",
+        # UI noise patterns
+        "this button displays", "see this and similar jobs", "search type",
+        "click here", "read more", "learn more", "view job", "apply now",
+        "save job", "bookmark", "share job", "report job", "flag job",
+        "similar jobs", "related jobs", "more jobs", "other jobs",
+        "job search", "job alerts", "job recommendations",
+        "posted by", "posted on", "posted at", "posted date",
+        "job id", "job reference", "ref id", "reference number",
+        "application deadline", "closing date", "last date",
+        "company website", "company profile", "about company",
+        "employee reviews", "company reviews", "salary insights",
+        "interview questions", "interview tips", "career advice",
+        "resume tips", "cv tips", "cover letter",
+        "job fair", "career fair", "recruitment drive",
+        "walk-in", "walk in", "direct hiring", "immediate hiring",
+        "urgent requirement", "immediate requirement", "urgent opening",
+        "limited positions", "few positions", "multiple positions",
+        "apply online", "apply offline", "apply via email",
+        "send resume", "send cv", "submit application",
+        "no experience required", "fresher", "experienced",
+        "work from home", "remote work", "hybrid work",
+        "full time", "part time", "contract", "permanent",
+        "salary negotiable", "salary not disclosed", "competitive salary",
+        "benefits included", "perks included", "incentives included",
+        "training provided", "training available", "on the job training",
+        "growth opportunities", "career growth", "promotion opportunities",
+        "friendly environment", "good culture", "positive environment",
+        "established company", "growing company", "startup",
+        "multinational", "mnc", "fortune 500", "top company",
+        "industry leader", "market leader", "leading company"
+    ]
+    
+    # Email pattern
+    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+    
+    # Posted pattern (to keep only one)
+    posted_pattern = re.compile(r'posted\s+(by|on|at|date)', re.IGNORECASE)
+    
     # Split into lines and filter
     lines = cleaned.split("\n")
     filtered_lines = []
     seen_content = set()  # Track seen content to avoid duplicates
+    seen_normalized = set()  # Track normalized content for better deduplication
+    has_posted_line = False  # Track if we've already seen a "Posted ..." line
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # Skip lines that are just navigation words
+        # Skip lines that contain emails
+        if email_pattern.search(line):
+            continue
+        
+        # Skip lines with excluded content patterns (UI noise)
         line_lower = line.lower()
+        if any(pattern in line_lower for pattern in exclude_content_patterns):
+            continue
+        
+        # Handle "Posted ..." lines - keep only the first one
+        if posted_pattern.search(line_lower):
+            if has_posted_line:
+                continue
+            has_posted_line = True
+        
+        # Skip lines that are just navigation words
         words_in_line = set(line_lower.split())
         
         # Skip if line is too short
@@ -439,11 +513,16 @@ def _clean_extracted_text(text: str) -> str:
         if len(words_in_line) > 0 and nav_word_count / len(words_in_line) > 0.4:
             continue
         
-        # Normalize for duplicate detection (remove extra spaces, lowercase)
-        normalized = re.sub(r'\s+', ' ', line_lower).strip()
+        # Normalize for duplicate detection (remove extra spaces, lowercase, remove punctuation)
+        normalized = re.sub(r'[^\w\s]', '', line_lower)  # Remove punctuation
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
         
-        # Skip if we've seen very similar content
-        if normalized in seen_content:
+        # Skip if we've seen very similar content (using normalized version)
+        if normalized in seen_normalized:
+            continue
+        
+        # Skip if exact line already seen
+        if line in seen_content:
             continue
         
         # Skip lines that are just repeated words (e.g., "Apply Apply Apply")
@@ -461,7 +540,8 @@ def _clean_extracted_text(text: str) -> str:
         if re.search(r'\b(\w{1,10})\s+\1\s+\1\b', normalized):
             continue
         
-        seen_content.add(normalized)
+        seen_content.add(line)
+        seen_normalized.add(normalized)
         filtered_lines.append(line)
     
     # Remove consecutive duplicate lines
@@ -480,15 +560,25 @@ def _clean_extracted_text(text: str) -> str:
     # Remove excessive repetition of single words
     result = re.sub(r'\b(\w{3,})\s+\1\s+\1(?:\s+\1)*\b', r'\1', result, flags=re.IGNORECASE)
     
+    # Normalize whitespace again
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    result = re.sub(r' {2,}', ' ', result)
+    
+    # Limit to 800-1000 characters max
+    if len(result) > 1000:
+        result = result[:997] + "..."
+    
     return result
 
 
-def _extract_job_description_from_html(html_text: str, max_chars: int = 1500) -> str:
+def _extract_job_description_from_html(html_text: str, max_chars: int = 1200) -> str:
     """
     Extract only job description content from HTML.
     Tries multiple strategies:
     1. Target specific job-related tags and classes
     2. Fallback to first few paragraphs if no job section found
+    
+    Limits extraction to 800-1200 characters max for cleaner output.
     """
     # Strategy 1: Try job-specific extraction
     job_extractor = _JobDescriptionExtractor()
@@ -510,7 +600,7 @@ def _extract_job_description_from_html(html_text: str, max_chars: int = 1500) ->
     except Exception:
         pass
     
-    full_text = fallback_extractor.get_text(max_chars * 3)  # Get more to filter
+    full_text = fallback_extractor.get_text(max_chars * 2)  # Get more to filter
     
     # Take first 2-3 substantial paragraphs
     paragraphs = [p.strip() for p in full_text.split("\n\n") if len(p.strip()) >= 50]
@@ -732,8 +822,8 @@ def _fetch_and_extract_url_context(job_url: str) -> UrlExtraction:
         return _empty_ctx(f"{type(e).__name__}: {e}")
     
     # Extract only job description content (not entire webpage)
-    # Limit to 1500 characters for cleaner highlighting
-    job_description_text = _extract_job_description_from_html(html_text, max_chars=1500)
+    # Limit to 1200 characters for cleaner highlighting
+    job_description_text = _extract_job_description_from_html(html_text, max_chars=1200)
     
     # Also get meta descriptions for additional context
     meta_descs = _extract_meta_descriptions(html_text)
