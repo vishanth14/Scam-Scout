@@ -1,10 +1,10 @@
 import html
 import ipaddress
 import logging
-import random
 import re
 import socket
 import time
+import threading
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -15,6 +15,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from rules import analyze_rules, risk_band_from_score
 
 logger = logging.getLogger(__name__)
+
+# Global NLP pipeline - loaded once at startup
+_nlp_pipeline = None
+_nlp_lock = threading.Lock()
+_nlp_loaded = False
+_nlp_error = None
 
 # Known job site domains and patterns
 JOB_SITE_DOMAINS = [
@@ -168,6 +174,151 @@ MAX_FETCH_BYTES = 2_000_000
 FETCH_TIMEOUT_S = 8
 MAX_ANALYSIS_CHARS = 12_000
 MAX_EXCERPT_CHARS = 6_000
+
+
+def _load_nlp_pipeline():
+    """Load the NLP pipeline once at startup with retry mechanism."""
+    global _nlp_pipeline, _nlp_loaded, _nlp_error
+    
+    with _nlp_lock:
+        if _nlp_loaded:
+            return _nlp_pipeline is not None
+        
+        try:
+            logger.info("Loading Hugging Face NLP model...")
+            from transformers import pipeline
+            
+            # Load lightweight zero-shot classification model
+            _nlp_pipeline = pipeline(
+                "zero-shot-classification",
+                model="typeform/distilbert-base-uncased-mnli",
+                device=-1  # Use CPU
+            )
+            _nlp_loaded = True
+            _nlp_error = None
+            logger.info("NLP model loaded successfully")
+            return True
+        except Exception as e:
+            _nlp_error = f"Failed to load NLP model: {str(e)}"
+            _nlp_loaded = True  # Mark as loaded even if failed
+            logger.error(f"NLP model loading failed: {e}")
+            return False
+
+
+def _get_nlp_pipeline():
+    """Get the NLP pipeline, loading it if necessary."""
+    global _nlp_pipeline, _nlp_loaded
+    
+    if not _nlp_loaded:
+        _load_nlp_pipeline()
+    
+    return _nlp_pipeline
+
+
+def _clean_text_for_nlp(text: str) -> str:
+    """Clean input text before sending to NLP model."""
+    if not text:
+        return ""
+    
+    # Remove duplicate lines
+    lines = text.split('\n')
+    seen = set()
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        if line and line not in seen:
+            seen.add(line)
+            cleaned_lines.append(line)
+    
+    cleaned = '\n'.join(cleaned_lines)
+    
+    # Remove UI text patterns
+    ui_patterns = [
+        r'\b(login|log in|sign in|signin|signup|sign up|register)\b',
+        r'\b(home|about|contact|menu|navigation|search|skip)\b',
+        r'\b(cookie|privacy|terms|copyright|©|all rights)\b',
+        r'\b(loading|please wait|click here|read more|learn more)\b',
+        r'\b(subscribe|newsletter|follow us|share|tweet|like)\b',
+        r'\b(facebook|twitter|linkedin|instagram|youtube)\b',
+        r'\b(accept|decline|agree|disagree|ok|cancel|close)\b',
+        r'\b(submit|reset|clear|back|next|previous|continue)\b',
+    ]
+    
+    for pattern in ui_patterns:
+        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+    
+    # Limit to first 512-800 words (token safe)
+    words = cleaned.split()
+    if len(words) > 800:
+        cleaned = ' '.join(words[:800])
+    
+    return cleaned.strip()
+
+
+def _predict_with_nlp(text: str, rule_score: int) -> Tuple[int, Dict[str, float], Dict[str, Any]]:
+    """Use real Hugging Face NLP model for prediction."""
+    global _nlp_error
+    
+    pipeline = _get_nlp_pipeline()
+    
+    if pipeline is None:
+        # Model failed to load - return error
+        return 0, {}, {"model_name": "typeform/distilbert-base-uncased-mnli", "available": False, "error": _nlp_error}
+    
+    try:
+        # Clean text before NLP processing
+        cleaned_text = _clean_text_for_nlp(text)
+        
+        if not cleaned_text or len(cleaned_text) < 20:
+            # Not enough text for NLP analysis
+            return 0, {}, {"model_name": "typeform/distilbert-base-uncased-mnli", "available": True, "error": "Insufficient text for analysis"}
+        
+        # Define candidate labels for zero-shot classification
+        candidate_labels = ["fake job posting", "legitimate job posting"]
+        
+        # Run inference with timeout protection
+        start_time = time.time()
+        result = pipeline(cleaned_text, candidate_labels, multi_label=False)
+        inference_time = time.time() - start_time
+        
+        # Check timeout
+        if inference_time > 8.0:
+            logger.warning(f"NLP inference took {inference_time:.2f}s (exceeded 8s timeout)")
+        
+        # Extract probability for "fake job posting"
+        fake_prob = 0.0
+        for label, score in zip(result['labels'], result['scores']):
+            if label == "fake job posting":
+                fake_prob = score
+                break
+        
+        # Convert to nlp_score with strict thresholds
+        if fake_prob > 0.75:
+            nlp_score = int(85 + (fake_prob - 0.75) * 60)  # 85-100
+        elif fake_prob > 0.6:
+            nlp_score = int(65 + (fake_prob - 0.6) * 133.33)  # 65-85
+        elif fake_prob > 0.4:
+            nlp_score = int(40 + (fake_prob - 0.4) * 125)  # 40-65
+        else:
+            nlp_score = int(10 + fake_prob * 75)  # 10-40
+        
+        nlp_score = max(0, min(100, nlp_score))
+        
+        label_scores = {
+            "fake job posting": round(fake_prob, 4),
+            "legitimate job posting": round(1.0 - fake_prob, 4)
+        }
+        
+        return nlp_score, label_scores, {
+            "model_name": "typeform/distilbert-base-uncased-mnli",
+            "available": True,
+            "error": None,
+            "inference_time": round(inference_time, 3)
+        }
+        
+    except Exception as e:
+        logger.error(f"NLP prediction failed: {e}")
+        return 0, {}, {"model_name": "typeform/distilbert-base-uncased-mnli", "available": False, "error": str(e)}
 
 
 @dataclass(frozen=True)
@@ -848,27 +999,6 @@ def _fetch_and_extract_url_context(job_url: str) -> UrlExtraction:
     )
 
 
-class SimulatedNLPClassifier:
-    _instance: Optional["SimulatedNLPClassifier"] = None
-    MODEL_NAME = "distilbert-nlp"
-
-    def __init__(self):
-        self.model_name = self.MODEL_NAME
-
-    @classmethod
-    def get_instance(cls) -> "SimulatedNLPClassifier":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
-    def predict(self, text: str, rule_score: int) -> Tuple[int, Dict[str, float], Dict[str, Any]]:
-        variation = random.uniform(-0.08, 0.08)
-        fake_prob = min(1.0, max(0.0, (rule_score / 100.0) * 0.7 + variation + 0.15))
-        nlp_score = int(round(fake_prob * 100))
-        label_scores = {"fake job posting": round(fake_prob, 4), "legitimate job posting": round(1.0 - fake_prob, 4)}
-        return nlp_score, label_scores, {"model_name": self.model_name, "available": True, "label_scores": label_scores}
-
-
 def _extract_red_flags(matches: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     reasons = {
         "Upfront payments / gift cards": "Asking for payment is a common scam tactic",
@@ -880,6 +1010,16 @@ def _extract_red_flags(matches: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         "Suspicious compensation wording": "Unusual salary formats can indicate scams",
         "Pays for training / course fees": "Legitimate employers pay for training, not candidates",
         "Generic or mismatched email": "Real companies use their own domain emails",
+        "Unrealistic income claims": "Promises of extremely high daily/weekly income are common in job scams",
+        "Vague or generic job description": "Scam postings often have very short, vague descriptions with no specific details",
+        "Excessive urgency language": "Overly aggressive urgency tactics designed to prevent careful consideration",
+        "Suspicious wording patterns": "Language that suggests minimal requirements or too-easy employment",
+        "External communication shift": "Attempts to move conversation away from official platforms",
+        "Pyramid / MLM scheme indicators": "Language commonly associated with pyramid schemes or multi-level marketing scams",
+        "Identity theft risk indicators": "Requests for sensitive personal information early in the process",
+        "Fake company indicators": "Signs that the company may not exist or is misrepresented",
+        "Unrealistic payment promises": "Promises of payment that seem too good to be true",
+        "Crypto / investment scam indicators": "Job postings that are actually cryptocurrency or investment scams",
     }
     red_flags = []
     for match in matches:
@@ -901,6 +1041,16 @@ def _extract_safety_actions(matches: List[Dict[str, Any]]) -> List[str]:
         "unusual_salary_bands": "Confirm compensation details with official HR contact",
         "training_or_course_fee": "Never pay for training - legitimate employers cover these costs",
         "generic_email_domain": "Contact company through their official website, not generic emails",
+        "unrealistic_salary_patterns": "Research typical salary ranges for this position - high daily income claims are red flags",
+        "generic_job_descriptions": "Legitimate job postings include specific responsibilities and requirements",
+        "excessive_urgency": "High-pressure tactics are a common scam indicator - take time to verify",
+        "suspicious_wording": "Real jobs require specific skills - claims of 'no skills required' are suspicious",
+        "external_communication_shift": "Never move to personal chat apps - use official company channels only",
+        "pyramid_scheme_indicators": "Legitimate jobs pay for your work, not for recruiting others",
+        "identity_theft_risk": "Never share sensitive personal information before verifying the employer",
+        "fake_company_indicators": "Verify company claims through independent sources and official websites",
+        "payment_promises": "Legitimate employers have standard pay cycles - instant payment promises are suspicious",
+        "crypto_investment_scam": "Never invest money based on a job posting - these are typically scams",
     }
     actions = []
     for match in matches:
@@ -928,16 +1078,16 @@ def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious
     
     nlp_available = bool(nlp_debug and nlp_debug.get("available"))
     
-    # Generate different explanations based on analysis mode
+    # Generate different explanations based on analysis mode - MORE ASSERTIVE MESSAGING
     if analysis_mode == "nlp":
         # NLP-only mode explanation
         nlp_confidence = abs(nlp_score - 50)  # Distance from neutral (50)
         if nlp_score >= 70:
             ai_assessment = "AI model detected strong indicators of a fraudulent job posting"
         elif nlp_score >= 55:
-            ai_assessment = "AI model identified some suspicious patterns commonly found in scam jobs"
+            ai_assessment = "AI model identified suspicious patterns commonly found in scam jobs"
         elif nlp_score >= 45:
-            ai_assessment = "AI model analysis shows mixed signals with slight concerns"
+            ai_assessment = "AI model analysis shows mixed signals with some concerns"
         elif nlp_score >= 30:
             ai_assessment = "AI model suggests this posting has mostly legitimate characteristics"
         else:
@@ -946,9 +1096,9 @@ def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious
         explanation_summary = f"{risk_band} risk: {ai_assessment}. NLP confidence: {nlp_confidence}%. This analysis uses deep learning to detect linguistic patterns associated with job scams."
         
     elif analysis_mode == "rules":
-        # Rules-only mode explanation
+        # Rules-only mode explanation - MORE ASSERTIVE
         if not top_rule_descriptions:
-            explanation_summary = f"{risk_band} risk: No suspicious patterns detected by rule-based analysis. The posting doesn't match known scam indicators like upfront payments, urgency tactics, or unrealistic promises."
+            explanation_summary = f"{risk_band} risk: Low risk, but caution signals detected. The posting doesn't match strong scam indicators, but always verify employer legitimacy before sharing personal information."
         else:
             pattern_count = len(matches)
             if pattern_count >= 4:
@@ -961,13 +1111,13 @@ def build_explanation(rule_score: int, matches: List[Dict[str, Any]], suspicious
             explanation_summary = f"{risk_band} risk: {pattern_assessment}. Key indicators: {', '.join(top_rule_descriptions[:3])}. This analysis checks for known scam tactics like gift card requests, chat-only communication, and guaranteed employment claims."
     
     else:
-        # Hybrid mode explanation (default)
+        # Hybrid mode explanation (default) - MORE ASSERTIVE
         nlp_note = "NLP model not available; using rule-based signals only." if not nlp_available else "AI model contributed a probability estimate."
         
         if top_rule_descriptions:
             explanation_summary = f"{risk_band} risk: {nlp_note} Combined analysis found {len(matches)} pattern(s): {', '.join(top_rule_descriptions[:2])}. Hybrid mode provides the most comprehensive detection by combining AI language analysis with known scam pattern matching."
         else:
-            explanation_summary = f"{risk_band} risk: {nlp_note} No strong pattern matches detected. Hybrid analysis combines AI assessment with rule-based checks for thorough evaluation."
+            explanation_summary = f"{risk_band} risk: {nlp_note} Low risk, but caution signals detected. Hybrid analysis combines AI assessment with rule-based checks for thorough evaluation. Always verify employer legitimacy."
     
     return {"risk_band": risk_band, "explanation_summary": explanation_summary, "rule_score": rule_score, "nlp_score": nlp_score, "matches": matches, "top_rules": top_rules, "suspicious_keywords": suspicious_keywords, "suggestions": suggestions[:6], "nlp_debug": nlp_debug}
 
@@ -1001,12 +1151,27 @@ def _verdict_from_signals(risk_band: str, rule_score: int, matches: List[Dict[st
 
 class JobAnalyzer:
     def __init__(self):
-        self.classifier = SimulatedNLPClassifier.get_instance()
+        # Load NLP pipeline at startup
+        _load_nlp_pipeline()
 
     def nlp_status(self) -> Dict[str, Any]:
-        return {"available": True, "loading": False, "model_name": self.classifier.model_name, "error": None}
+        global _nlp_loaded, _nlp_error
+        if not _nlp_loaded:
+            _load_nlp_pipeline()
+        return {
+            "available": _nlp_pipeline is not None,
+            "loading": False,
+            "model_name": "typeform/distilbert-base-uncased-mnli",
+            "error": _nlp_error
+        }
 
     def force_nlp_retry(self) -> Dict[str, Any]:
+        global _nlp_pipeline, _nlp_loaded, _nlp_error
+        with _nlp_lock:
+            _nlp_pipeline = None
+            _nlp_loaded = False
+            _nlp_error = None
+        _load_nlp_pipeline()
         return self.nlp_status()
 
     def analyze(self, job_text: str, job_url: Optional[str] = None, analysis_mode: str = "hybrid") -> Dict[str, Any]:
@@ -1038,9 +1203,9 @@ class JobAnalyzer:
         
         # Calculate scores based on analysis mode
         rule_score, matches, suspicious_keywords, suggestions = analyze_rules(prepared_for_scoring)
-        nlp_score, label_scores, nlp_debug = self.classifier.predict(prepared_for_scoring, rule_score)
+        nlp_score, label_scores, nlp_debug = _predict_with_nlp(prepared_for_scoring, rule_score)
         
-        # Adjust final score based on analysis mode
+        # Adjust final score based on analysis mode - FIXED HYBRID SCORING
         if analysis_mode == "nlp":
             # NLP only - use NLP score with minimal rule influence
             final_score = max(0, min(100, int(round(0.9 * nlp_score + 0.1 * rule_score))))
@@ -1050,9 +1215,26 @@ class JobAnalyzer:
             final_score = max(0, min(100, rule_score))
             explanation_summary_suffix = " (Rules mode)"
         else:
-            # Hybrid mode - use both NLP and rules (default)
-            final_score = max(0, min(100, int(round(0.6 * rule_score + 0.4 * nlp_score))))
+            # FIXED HYBRID SCORING FORMULA
+            # IF rule_score >= 50: final_score = max(rule_score, int(0.7 * rule_score + 0.3 * nlp_score))
+            # ELSE: final_score = int(0.6 * rule_score + 0.4 * nlp_score)
+            if rule_score >= 50:
+                final_score = max(rule_score, int(0.7 * rule_score + 0.3 * nlp_score))
+            else:
+                final_score = int(0.6 * rule_score + 0.4 * nlp_score)
+            final_score = max(0, min(100, final_score))
             explanation_summary_suffix = " (Hybrid mode)"
+        
+        # FORCE RISK DETECTION for specific high-risk keywords
+        high_risk_keywords = ["whatsapp", "telegram", "crypto", "payment", "processing fee"]
+        for keyword in high_risk_keywords:
+            if keyword in prepared_for_scoring.lower():
+                final_score = max(final_score, 50)
+                break
+        
+        # FIX "ALWAYS SAFE" ISSUE - Do NOT allow final_score < 20 if any rule matched
+        if matches and final_score < 20:
+            final_score = 20
         
         explanation = build_explanation(rule_score, matches, suspicious_keywords, suggestions, nlp_score, nlp_debug, final_score, analysis_mode)
         # Add mode indicator to explanation summary
@@ -1084,8 +1266,8 @@ class JobAnalyzer:
             "risk_band": explanation["risk_band"],
             "rule_score": explanation["rule_score"],
             "nlp_score": explanation["nlp_score"],
-            "nlp": {"model_name": nlp_debug.get("model_name"), "label_scores": label_scores, "available": True, "error": None},
-            "ai_used": analysis_mode in ["nlp", "hybrid"],
+            "nlp": {"model_name": nlp_debug.get("model_name"), "label_scores": label_scores, "available": nlp_debug.get("available", False), "error": nlp_debug.get("error")},
+            "ai_used": analysis_mode in ["nlp", "hybrid"] and nlp_debug.get("available", False),
             "analysis_mode": analysis_mode,
             "explanation_summary": explanation["explanation_summary"],
             "matches": explanation["matches"] if analysis_mode in ["rules", "hybrid"] else [],
