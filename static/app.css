@@ -130,14 +130,6 @@ body[data-theme="dark"] .safetyReminders {
   background: rgba(31, 41, 55, 0.8);
 }
 
-body[data-theme="dark"] .backgroundProcesses {
-  background: rgba(31, 41, 55, 0.8);
-}
-
-body[data-theme="dark"] .processItem {
-  background: rgba(31, 41, 55, 0.6);
-}
-
 body[data-theme="dark"] .reportWrap {
   background: rgba(31, 41, 55, 0.8);
 }
@@ -382,18 +374,6 @@ body[data-theme="dark"] .bgBlobC {
 
 .safetyReminders { margin-top: 14px; padding: 12px; border-radius: 16px; border: 1px solid rgba(255, 215, 0, 0.30); background: rgba(255,255,255,0.06); backdrop-filter: blur(12px); }
 
-.backgroundProcesses { margin-top: 14px; padding: 12px; border-radius: 16px; border: 1px solid rgba(255, 215, 0, 0.30); background: rgba(255,255,255,0.06); backdrop-filter: blur(12px); }
-
-.processList { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-
-.processItem { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); font-size: 12px; }
-
-.processIcon { flex-shrink: 0; font-size: 12px; }
-
-.processName { flex: 1; color: var(--text); font-weight: 600; }
-
-.processStatus { color: rgba(34, 197, 94, 0.95); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-
 @media (prefers-reduced-motion: reduce) { .bgBlob { animation: none !important; } }
 
 @media (max-width: 980px) {
@@ -572,21 +552,6 @@ button {
 }
 
 mark.kw { background: rgba(255, 215, 0, 0.32); border: 1px solid rgba(255, 215, 0, 0.62); color: var(--dark-text); padding: 0 2px; border-radius: 6px; }
-
-mark.suspicious-keyword { 
-  background: rgba(255, 215, 0, 0.35); 
-  border: 1px solid rgba(255, 215, 0, 0.65); 
-  color: var(--dark-text); 
-  padding: 0 3px; 
-  border-radius: 6px; 
-  font-weight: 600;
-}
-
-body[data-theme="dark"] mark.suspicious-keyword {
-  background: rgba(255, 215, 0, 0.30);
-  border-color: rgba(255, 215, 0, 0.55);
-  color: #e5e7eb;
-}
 
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
 

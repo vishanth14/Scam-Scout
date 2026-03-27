@@ -154,64 +154,6 @@ function renderScoreBreakdown(scoreBreakdown) {
   });
 }
 
-function renderBackgroundProcesses(data) {
-  const section = $("backgroundProcesses");
-  const list = $("processList");
-  if (!section || !list) return;
-  list.innerHTML = "";
-  
-  if (!data) {
-    section.style.display = "none";
-    return;
-  }
-  
-  const processes = [];
-  
-  // URL validation
-  if (data.url_context?.job_url) {
-    processes.push({ name: "URL Validation", status: "completed", icon: "✅" });
-  }
-  
-  // Job site detection
-  if (data.url_context?.fetched_ok) {
-    processes.push({ name: "Job Site Detection", status: "completed", icon: "✅" });
-  }
-  
-  // Content extraction
-  if (data.analysis_excerpt_for_highlight) {
-    processes.push({ name: "Content Extraction", status: "completed", icon: "✅" });
-  }
-  
-  // Rule-based analysis
-  if (data.analysis_mode === "rules" || data.analysis_mode === "hybrid") {
-    processes.push({ name: "Rule-Based Analysis", status: "completed", icon: "✅" });
-  }
-  
-  // NLP analysis
-  if (data.analysis_mode === "nlp" || data.analysis_mode === "hybrid") {
-    processes.push({ name: "NLP Analysis", status: "completed", icon: "✅" });
-  }
-  
-  // Risk scoring
-  if (data.risk_score !== undefined) {
-    processes.push({ name: "Risk Scoring", status: "completed", icon: "✅" });
-  }
-  
-  if (processes.length === 0) {
-    section.style.display = "none";
-    return;
-  }
-  
-  section.style.display = "block";
-  
-  processes.forEach(process => {
-    const item = document.createElement("div");
-    item.className = "processItem";
-    item.innerHTML = `<span class="processIcon">${process.icon}</span><span class="processName">${process.name}</span><span class="processStatus">${process.status}</span>`;
-    list.appendChild(item);
-  });
-}
-
 function renderFromResult(data) {
   if (!data) return;
 
@@ -232,7 +174,6 @@ function renderFromResult(data) {
   renderRedFlags(redFlags);
   renderSafetyActions(data.safety_actions || []);
   renderScoreBreakdown(data.score_breakdown || []);
-  renderBackgroundProcesses(data);
   
   // Show extracted content label when there's content
   const extractedLabel = $("extractedContentLabel");
@@ -243,7 +184,7 @@ function renderFromResult(data) {
     extractedLabel.style.display = "none";
   }
   
-  $("preview").innerHTML = highlightRedFlagsInText(previewContent, redFlags, data.highlight_keywords || []);
+  $("preview").innerHTML = highlightRedFlagsInText(previewContent, redFlags);
   renderAllMatches(data.matches || []);
   renderSuggestions(data.suggestions || []);
   renderGoldSilverSignals(data.gold_signals || [], data.silver_signals || []);
@@ -374,39 +315,19 @@ function renderSafetyActions(safetyActions) {
   });
 }
 
-function highlightRedFlagsInText(text, redFlags, highlightKeywords = [], maxChars = 4200) {
+function highlightRedFlagsInText(text, redFlags, maxChars = 4200) {
   if (!text) return "";
   let inputText = String(text);
   if (inputText.length > maxChars) inputText = inputText.slice(0, maxChars - 1) + "...";
   
-  // Collect all phrases to highlight
   const redFlagPhrases = (redFlags || []).map(f => f.phrase).filter(p => p && p.length >= 2);
-  const keywordPhrases = (highlightKeywords || []).filter(p => p && p.length >= 2);
-  
-  // Combine and deduplicate
-  const allPhrases = [...new Set([...redFlagPhrases, ...keywordPhrases])];
-  
-  // Sort by length (longest first) to avoid partial matches
-  const unique = allPhrases.sort((a, b) => b.length - a.length);
+  const unique = Array.from(new Set(redFlagPhrases)).sort((a, b) => b.length - a.length);
   
   let escaped = escapeHtml(inputText);
-  
-  // Highlight red flag phrases with red background
-  redFlagPhrases.slice(0, 15).forEach(phrase => {
+  unique.slice(0, 15).forEach(phrase => {
     const re = new RegExp(escapeRegExp(phrase), "gi");
     escaped = escaped.replace(re, (match) => '<mark class="red-flag">' + match + '</mark>');
   });
-  
-  // Highlight suspicious keywords with yellow background (if not already highlighted)
-  keywordPhrases.slice(0, 20).forEach(phrase => {
-    const re = new RegExp(escapeRegExp(phrase), "gi");
-    escaped = escaped.replace(re, (match) => {
-      // Don't double-highlight
-      if (match.includes('<mark')) return match;
-      return '<mark class="suspicious-keyword">' + match + '</mark>';
-    });
-  });
-  
   return escaped;
 }
 
@@ -539,10 +460,6 @@ function clearUI() {
   // Hide extracted content label
   const extractedLabel = $("extractedContentLabel");
   if (extractedLabel) extractedLabel.style.display = "none";
-  
-  // Hide background processes section
-  const bgProcesses = $("backgroundProcesses");
-  if (bgProcesses) bgProcesses.style.display = "none";
   
   ["redFlagsSection", "safetyActionsSection", "scoreBreakdownSection"].forEach(id => {
     const el = $(id);
